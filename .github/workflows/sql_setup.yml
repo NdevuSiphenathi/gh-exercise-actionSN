@@ -1,0 +1,71 @@
+# This is the name of the workflow that will appear in the GitHub Actions interface.
+name: Setup SQL Server Database
+
+# Trigger the workflow whenever code is pushed to the main branch.
+on:
+  push:
+    branches:
+      - main
+
+# Define the jobs for this workflow.
+jobs:
+  # The job will run on the latest version of Ubuntu.
+  setup-database:
+    runs-on: ubuntu-latest
+
+    # Steps that make up the job.
+    steps:
+      # Step 1: Checkout the code from the repository so that we can work with it.
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Step 2: Install Microsoft SQL Server
+      # This will install SQL Server on the GitHub Actions runner.
+      - name: Install SQL Server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mssql-server
+
+      # Step 3: Start the SQL Server service
+      # We need to ensure SQL Server is running before we can connect to it.
+      - name: Start SQL Server
+        run: |
+          sudo systemctl start mssql-server
+          sudo systemctl status mssql-server
+
+      # Step 4: Install the SQLCMD command-line tool
+      # This tool allows us to run SQL queries from the command line.
+      - name: Install SQLCMD
+        run: |
+          sudo apt-get install -y mssql-tools unixodbc-dev
+          # Add SQLCMD to the path so it can be used easily.
+          echo 'export PATH="$PATH:/opt/mssql-tools/bin"' >> ~/.bashrc
+          source ~/.bashrc
+
+      # Step 5: Create the database and table
+      # This step will connect to SQL Server using SQLCMD and create the database and table.
+      - name: Create Database and Table
+        run: |
+          # Connect to SQL Server and create the 'AutoTest' database.
+          /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P ${{ secrets.SQL_SERVER_PASSWORD }} -Q "CREATE DATABASE AutoTest;"
+          # Create a table named 'user' with Name, Surname, and Email columns.
+          /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P ${{ secrets.SQL_SERVER_PASSWORD }} -d AutoTest -Q "CREATE TABLE user (Name NVARCHAR(50), Surname NVARCHAR(50), Email NVARCHAR(100));"
+
+      # Step 6: Install Zrok to expose SQL Server to the internet
+      # Zrok will allow us to share our local SQL Server instance publicly.
+      - name: Install Zrok
+        run: |
+          curl -s https://get.zrok.io | bash
+
+      # Step 7: Authenticate Zrok using your API token
+      # Replace YOUR_ZROK_TOKEN with your actual token stored in GitHub Secrets.
+      - name: Authenticate Zrok
+        run: |
+          zrok enable ${{ secrets.ZROK_AUTH_TOKEN }}
+
+      # Step 8: Expose the SQL Server instance via Zrok
+      # This will expose SQL Server on port 1433. The URL will be output in the logs.
+      - name: Expose SQL Server with Zrok
+        run: |
+          zrok share public tcp:1433 > zrok_output.txt
+          cat zrok_output.txt  # Display the Zrok public URL in the logs.
