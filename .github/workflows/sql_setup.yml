@@ -1,63 +1,115 @@
-name: AutoTest DB Setup via zrok
+name: SQL Server Automation via zrok
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
 
 jobs:
-  setup-db:
+  deploy:
     runs-on: windows-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - name: Run SQL Automation
-        run: |
-          $server = "${{ secrets.ZROK_SQL_ENDPOINT }}"
-          $password = "${{ secrets.SQL_SERVER_PASSWORD }}"
+    # Install zrok and authenticate
+    - name: Setup zrok
+      run: |
+        choco install zrok -y
+        $env:Path += ";C:\ProgramData\chocolatey\bin"
+        zrok invite ${{ secrets.ZROK_TOKEN }}
+        zrok share private 1433 > zrok.log 2>&1 &
+        Start-Sleep -Seconds 10
+        Get-Content zrok.log
 
-          $sqlScript = @"
-          -- Create database if missing
-          IF NOT EXISTS (SELECT name FROM sys.databases WHERE name = 'AutoTest')
-          CREATE DATABASE AutoTest;
-          GO
+    # Verify connection before SQL operations
+    - name: Test SQL Server connection
+      run: |
+        $server = "${{ secrets.ZROK_ENDPOINT }}"
+        $timeout = 30  # seconds
+        
+        Write-Output "Testing connection to: $server"
+        $testResult = Test-NetConnection -ComputerName $server.split(',')[0] -Port 1433 -InformationLevel Quiet -WarningAction SilentlyContinue
+        
+        if (-not $testResult) {
+          Write-Output "❌ Connection failed! Checking services..."
+          Get-Service | Where-Object { $_.Name -like "*SQL*" } | Format-Table -AutoSize
+          exit 1
+        }
 
-          USE AutoTest;
-          GO
+    # Main SQL operations
+    - name: Execute SQL Script
+      run: |
+        $server = "${{ secrets.ZROK_ENDPOINT }}"
+        $password = "${{ secrets.SQL_PASSWORD }}"
+        
+        $sqlScript = @"
+        -- Create database if not exists
+        IF NOT EXISTS (SELECT name FROM sys.databases WHERE name = 'AutoTest')
+        CREATE DATABASE AutoTest;
+        GO
 
-          -- Create login/user ONLY if missing
-          IF NOT EXISTS (SELECT * FROM sys.server_principals WHERE name = 'Auto_user')
-          BEGIN
-              CREATE LOGIN Auto_user WITH PASSWORD = '$password';
-              CREATE USER Auto_user FOR LOGIN Auto_user;
-              EXEC sp_addrolemember 'db_owner', 'Auto_user';
-          END
-          GO
+        USE AutoTest;
+        GO
 
-          -- Create table if missing
-          IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'user')
-          CREATE TABLE [user] (
-              Name NVARCHAR(50),
-              Surname NVARCHAR(50),
-              Email NVARCHAR(100)
-          );
-          GO
+        -- Create login only if missing (idempotent)
+        IF NOT EXISTS (SELECT * FROM sys.server_principals WHERE name = 'Auto_user')
+        BEGIN
+            CREATE LOGIN Auto_user WITH PASSWORD = '$password';
+            CREATE USER Auto_user FOR LOGIN Auto_user;
+            EXEC sp_addrolemember 'db_owner', 'Auto_user';
+            PRINT 'Created Auto_user successfully';
+        END
+        ELSE
+            PRINT 'Auto_user already exists';
+        GO
 
-          -- Create/update stored procedure
-          CREATE OR ALTER PROCEDURE InsertUserData
-              @Name NVARCHAR(50),
-              @Surname NVARCHAR(50),
-              @Email NVARCHAR(100)
-          AS
-          BEGIN
-              INSERT INTO [user] (Name, Surname, Email)
-              VALUES (@Name, @Surname, @Email);
-          END;
-          GO
+        -- Create table if not exists
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'user' AND type = 'U')
+        CREATE TABLE [user] (
+            Name NVARCHAR(50) NOT NULL,
+            Surname NVARCHAR(50) NOT NULL,
+            Email NVARCHAR(100) NOT NULL
+        );
+        GO
 
-          -- Insert test data
-          EXEC InsertUserData 'GitHub', 'Action', 'ci@example.com';
-          GO
-          "@
+        -- Create/alter stored procedure
+        CREATE OR ALTER PROCEDURE InsertUserData
+            @Name NVARCHAR(50),
+            @Surname NVARCHAR(50),
+            @Email NVARCHAR(100)
+        AS
+        BEGIN
+            INSERT INTO [user] (Name, Surname, Email)
+            VALUES (@Name, @Surname, @Email);
+            RETURN @@ROWCOUNT;
+        END;
+        GO
 
-          sqlcmd -S $server -U Auto_user -P $password -Q "$sqlScript"
+        -- Insert test data
+        DECLARE @rows INT;
+        EXEC @rows = InsertUserData 'GitHub', 'Action', 'ci@example.com';
+        PRINT CONCAT('Inserted ', @rows, ' row(s)');
+        GO
+
+        -- Verify data
+        SELECT * FROM [user];
+        GO
+        "@
+
+        # Execute with error handling
+        try {
+          sqlcmd -S $server -U Auto_user -P $password -Q "$sqlScript" -t 30 -o sql_output.log
+          Get-Content sql_output.log
+        }
+        catch {
+          Write-Output "❌ SQL execution failed: $_"
+          exit 1
+        }
+
+    # Cleanup (optional)
+    - name: Stop zrok tunnel
+      if: always()
+      run: |
+        taskkill /IM zrok.exe /F
