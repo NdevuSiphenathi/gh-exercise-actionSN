@@ -1,67 +1,63 @@
-# This is the name of the workflow that will appear in the GitHub Actions interface.
-name: Setup SQL Server Database
+name: AutoTest DB Setup via zrok
 
-# Trigger the workflow whenever code is pushed to the main branch.
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
-# Define the jobs for this workflow.
 jobs:
-  setup-database:
-    runs-on: ubuntu-latest
-
+  setup-db:
+    runs-on: windows-latest
     steps:
-      - name: Checkout Repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      # Start SQL Server in Docker
-      - name: Start SQL Server in Docker
+      - name: Run SQL Automation
         run: |
-          docker run -e 'ACCEPT_EULA=Y' -e 'SA_PASSWORD=${{ secrets.SQL_SERVER_PASSWORD }}' \
-            -p 1433:1433 --name sqlserver -d mcr.microsoft.com/mssql/server:2022-latest
+          $server = "${{ secrets.ZROK_SQL_ENDPOINT }}"
+          $password = "${{ secrets.SQL_SERVER_PASSWORD }}"
 
-      # Wait for SQL Server to be ready
-      - name: Wait for SQL Server to start
-        run: |
-          echo "Waiting for SQL Server to start..."
-          sleep 20
+          $sqlScript = @"
+          -- Create database if missing
+          IF NOT EXISTS (SELECT name FROM sys.databases WHERE name = 'AutoTest')
+          CREATE DATABASE AutoTest;
+          GO
 
-      # Install SQLCMD inside the container as root
-      - name: Install SQLCMD inside the container
-        run: |
-          docker exec -u 0 sqlserver /bin/bash -c "apt-get update && apt-get install -y mssql-tools unixodbc-dev"
+          USE AutoTest;
+          GO
 
-      # Create Database and Table
-      - name: Create Database and Table
-        run: |
-          docker exec sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${{ secrets.SQL_SERVER_PASSWORD }}" -Q "CREATE DATABASE AutoTest;"
-          docker exec sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${{ secrets.SQL_SERVER_PASSWORD }}" -d AutoTest -Q "CREATE TABLE users (Name NVARCHAR(50), Surname NVARCHAR(50), Email NVARCHAR(100));"
+          -- Create login/user ONLY if missing
+          IF NOT EXISTS (SELECT * FROM sys.server_principals WHERE name = 'Auto_user')
+          BEGIN
+              CREATE LOGIN Auto_user WITH PASSWORD = '$password';
+              CREATE USER Auto_user FOR LOGIN Auto_user;
+              EXEC sp_addrolemember 'db_owner', 'Auto_user';
+          END
+          GO
 
-      # Install Zrok and Add to PATH
-      - name: Install Zrok
-        run: |
-          curl -s https://get.zrok.io | bash
-          echo 'export PATH=$HOME/bin:$PATH' >> ~/.bashrc
-          source ~/.bashrc
-          which zrok || echo "Zrok not found"
+          -- Create table if missing
+          IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'user')
+          CREATE TABLE [user] (
+              Name NVARCHAR(50),
+              Surname NVARCHAR(50),
+              Email NVARCHAR(100)
+          );
+          GO
 
-      # Verify Zrok Installation
-      - name: Check Zrok Installation
-        run: |
-          if ! command -v zrok &> /dev/null; then
-            echo "❌ Zrok installation failed!"
-            exit 1
-          fi
+          -- Create/update stored procedure
+          CREATE OR ALTER PROCEDURE InsertUserData
+              @Name NVARCHAR(50),
+              @Surname NVARCHAR(50),
+              @Email NVARCHAR(100)
+          AS
+          BEGIN
+              INSERT INTO [user] (Name, Surname, Email)
+              VALUES (@Name, @Surname, @Email);
+          END;
+          GO
 
-      # Authenticate Zrok
-      - name: Authenticate Zrok
-        run: |
-          $HOME/bin/zrok enable ${{ secrets.ZROK_AUTH_TOKEN }}
+          -- Insert test data
+          EXEC InsertUserData 'GitHub', 'Action', 'ci@example.com';
+          GO
+          "@
 
-      # Expose SQL Server with Zrok
-      - name: Expose SQL Server with Zrok
-        run: |
-          $HOME/bin/zrok share public tcp:1433 > zrok_output.txt
-          cat zrok_output.txt
+          sqlcmd -S $server -U Auto_user -P $password -Q "$sqlScript"
