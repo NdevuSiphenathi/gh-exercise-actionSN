@@ -18,7 +18,7 @@ jobs:
       run: |
         choco install zrok -y
         $env:Path += ";C:\ProgramData\chocolatey\bin"
-        zrok invite ${{ secrets.ZROK_TOKEN }}
+        zrok invite ${{ secrets.ZROK_AUTH_TOKEN }}
         zrok share private 1433 > zrok.log 2>&1 &
         Start-Sleep -Seconds 10
         Get-Content zrok.log
