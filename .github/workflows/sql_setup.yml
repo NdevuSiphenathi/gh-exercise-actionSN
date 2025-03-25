@@ -39,18 +39,29 @@ jobs:
           docker exec sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${{ secrets.SQL_SERVER_PASSWORD }}" -Q "CREATE DATABASE AutoTest;"
           docker exec sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${{ secrets.SQL_SERVER_PASSWORD }}" -d AutoTest -Q "CREATE TABLE users (Name NVARCHAR(50), Surname NVARCHAR(50), Email NVARCHAR(100));"
 
-      # Install Zrok
+      # Install Zrok and Add to PATH
       - name: Install Zrok
         run: |
           curl -s https://get.zrok.io | bash
+          echo 'export PATH=$HOME/bin:$PATH' >> ~/.bashrc
+          source ~/.bashrc
+          which zrok || echo "Zrok not found"
+
+      # Verify Zrok Installation
+      - name: Check Zrok Installation
+        run: |
+          if ! command -v zrok &> /dev/null; then
+            echo "❌ Zrok installation failed!"
+            exit 1
+          fi
 
       # Authenticate Zrok
       - name: Authenticate Zrok
         run: |
-          zrok enable ${{ secrets.ZROK_AUTH_TOKEN }}
+          $HOME/bin/zrok enable ${{ secrets.ZROK_AUTH_TOKEN }}
 
       # Expose SQL Server with Zrok
       - name: Expose SQL Server with Zrok
         run: |
-          zrok share public tcp:1433 > zrok_output.txt
+          $HOME/bin/zrok share public tcp:1433 > zrok_output.txt
           cat zrok_output.txt
