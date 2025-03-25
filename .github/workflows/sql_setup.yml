@@ -9,51 +9,48 @@ on:
 
 # Define the jobs for this workflow.
 jobs:
-  # The job will run on the latest version of Ubuntu.
   setup-database:
     runs-on: ubuntu-latest
 
-    # Steps that make up the job.
     steps:
-      # Step 1: Checkout the code from the repository so that we can work with it.
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Step 2: Start SQL Server in a Docker Container
+      # Start SQL Server in Docker
       - name: Start SQL Server in Docker
         run: |
           docker run -e 'ACCEPT_EULA=Y' -e 'SA_PASSWORD=${{ secrets.SQL_SERVER_PASSWORD }}' \
             -p 1433:1433 --name sqlserver -d mcr.microsoft.com/mssql/server:2022-latest
 
-      # Step 3: Wait for SQL Server to be ready
+      # Wait for SQL Server to be ready
       - name: Wait for SQL Server to start
         run: |
           echo "Waiting for SQL Server to start..."
           sleep 20
 
-      # Step 4: Install SQLCMD inside the container
+      # Install SQLCMD inside the container as root
       - name: Install SQLCMD inside the container
         run: |
-          docker exec -i sqlserver /bin/bash -c "apt-get update && apt-get install -y mssql-tools unixodbc-dev"
+          docker exec -u 0 sqlserver /bin/bash -c "apt-get update && apt-get install -y mssql-tools unixodbc-dev"
 
-      # Step 5: Create the database and table
+      # Create Database and Table
       - name: Create Database and Table
         run: |
-          docker exec -i sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${{ secrets.SQL_SERVER_PASSWORD }}" -Q "CREATE DATABASE AutoTest;"
-          docker exec -i sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${{ secrets.SQL_SERVER_PASSWORD }}" -d AutoTest -Q "CREATE TABLE users (Name NVARCHAR(50), Surname NVARCHAR(50), Email NVARCHAR(100));"
+          docker exec sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${{ secrets.SQL_SERVER_PASSWORD }}" -Q "CREATE DATABASE AutoTest;"
+          docker exec sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${{ secrets.SQL_SERVER_PASSWORD }}" -d AutoTest -Q "CREATE TABLE users (Name NVARCHAR(50), Surname NVARCHAR(50), Email NVARCHAR(100));"
 
-      # Step 6: Install Zrok to expose SQL Server to the internet
+      # Install Zrok
       - name: Install Zrok
         run: |
           curl -s https://get.zrok.io | bash
 
-      # Step 7: Authenticate Zrok using your API token
+      # Authenticate Zrok
       - name: Authenticate Zrok
         run: |
           zrok enable ${{ secrets.ZROK_AUTH_TOKEN }}
 
-      # Step 8: Expose the SQL Server instance via Zrok
+      # Expose SQL Server with Zrok
       - name: Expose SQL Server with Zrok
         run: |
           zrok share public tcp:1433 > zrok_output.txt
-          cat zrok_output.txt  # Display the Zrok public URL in the logs.
+          cat zrok_output.txt
