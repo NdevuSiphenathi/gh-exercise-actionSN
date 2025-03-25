@@ -31,23 +31,28 @@ jobs:
           echo "Waiting for SQL Server to start..."
           sleep 20
 
-      # Step 4: Create the database and table
+      # Step 4: Install SQLCMD inside the container
+      - name: Install SQLCMD inside the container
+        run: |
+          docker exec -i sqlserver /bin/bash -c "apt-get update && apt-get install -y mssql-tools unixodbc-dev"
+
+      # Step 5: Create the database and table
       - name: Create Database and Table
         run: |
           docker exec -i sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${{ secrets.SQL_SERVER_PASSWORD }}" -Q "CREATE DATABASE AutoTest;"
           docker exec -i sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${{ secrets.SQL_SERVER_PASSWORD }}" -d AutoTest -Q "CREATE TABLE users (Name NVARCHAR(50), Surname NVARCHAR(50), Email NVARCHAR(100));"
 
-      # Step 5: Install Zrok to expose SQL Server to the internet
+      # Step 6: Install Zrok to expose SQL Server to the internet
       - name: Install Zrok
         run: |
           curl -s https://get.zrok.io | bash
 
-      # Step 6: Authenticate Zrok using your API token
+      # Step 7: Authenticate Zrok using your API token
       - name: Authenticate Zrok
         run: |
           zrok enable ${{ secrets.ZROK_AUTH_TOKEN }}
 
-      # Step 7: Expose the SQL Server instance via Zrok
+      # Step 8: Expose the SQL Server instance via Zrok
       - name: Expose SQL Server with Zrok
         run: |
           zrok share public tcp:1433 > zrok_output.txt
