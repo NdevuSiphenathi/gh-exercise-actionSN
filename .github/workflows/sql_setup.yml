@@ -39,13 +39,13 @@ jobs:
           docker exec sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${{ secrets.SQL_SERVER_PASSWORD }}" -Q "CREATE DATABASE AutoTest;"
           docker exec sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${{ secrets.SQL_SERVER_PASSWORD }}" -d AutoTest -Q "CREATE TABLE users (Name NVARCHAR(50), Surname NVARCHAR(50), Email NVARCHAR(100));"
 
-      # Install Zrok and Add to PATH
+      # Install Zrok Manually
       - name: Install Zrok
         run: |
-          curl -s https://get.zrok.io | bash
-          echo 'export PATH=$HOME/bin:$PATH' >> ~/.bashrc
-          source ~/.bashrc
-          which zrok || echo "Zrok not found"
+          curl -sLO https://github.com/openziti/zrok/releases/latest/download/zrok-linux-amd64
+          chmod +x zrok-linux-amd64
+          sudo mv zrok-linux-amd64 /usr/local/bin/zrok
+          which zrok || echo "❌ Zrok installation failed!"
 
       # Verify Zrok Installation
       - name: Check Zrok Installation
@@ -53,15 +53,17 @@ jobs:
           if ! command -v zrok &> /dev/null; then
             echo "❌ Zrok installation failed!"
             exit 1
+          else
+            echo "✅ Zrok installed successfully!"
           fi
 
       # Authenticate Zrok
       - name: Authenticate Zrok
         run: |
-          $HOME/bin/zrok enable ${{ secrets.ZROK_AUTH_TOKEN }}
+          zrok enable ${{ secrets.ZROK_AUTH_TOKEN }}
 
       # Expose SQL Server with Zrok
       - name: Expose SQL Server with Zrok
         run: |
-          $HOME/bin/zrok share public tcp:1433 > zrok_output.txt
+          zrok share public tcp:1433 > zrok_output.txt
           cat zrok_output.txt
