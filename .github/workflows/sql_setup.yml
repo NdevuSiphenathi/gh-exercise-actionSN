@@ -9,64 +9,59 @@ on:
 
 # Define the jobs for this workflow.
 jobs:
-  # The job will run on the latest version of Ubuntu.
   setup-database:
     runs-on: ubuntu-latest
 
-    # Steps that make up the job.
     steps:
-      # Step 1: Checkout the code from the repository so that we can work with it.
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Step 2: Install Microsoft SQL Server
-      - name: Install SQL Server
+      # Start SQL Server in Docker
+      - name: Start SQL Server in Docker
         run: |
-          sudo curl https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
-          sudo curl https://packages.microsoft.com/config/ubuntu/20.04/prod.list > /etc/apt/sources.list.d/mssql-server.list
-          sudo apt-get update
-          sudo apt-get install -y mssql-server
+          docker run -e 'ACCEPT_EULA=Y' -e 'SA_PASSWORD=${{ secrets.SQL_SERVER_PASSWORD }}' \
+            -p 1433:1433 --name sqlserver -d mcr.microsoft.com/mssql/server:2022-latest
 
-      # Step 3: Start SQL Server
-      - name: Start SQL Server
+      # Wait for SQL Server to be ready
+      - name: Wait for SQL Server to start
         run: |
-          sudo systemctl start mssql-server
-          sudo systemctl status mssql-server
+          echo "Waiting for SQL Server to start..."
+          sleep 20
 
-      # Step 4: Install the SQLCMD command-line tool
-      - name: Install SQLCMD
+      # Install SQLCMD inside the container as root
+      - name: Install SQLCMD inside the container
         run: |
-          sudo apt-get install -y mssql-tools unixodbc-dev
-          echo 'export PATH="$PATH:/opt/mssql-tools/bin"' >> ~/.bashrc
-          source ~/.bashrc
+          docker exec -u 0 sqlserver /bin/bash -c "apt-get update && apt-get install -y mssql-tools unixodbc-dev"
 
-      # Step 5: Create the database and table
+      # Create Database and Table
       - name: Create Database and Table
         run: |
-          /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P ${{ secrets.SQL_SERVER_PASSWORD }} -Q "CREATE DATABASE AutoTest;"
-          /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P ${{ secrets.SQL_SERVER_PASSWORD }} -d AutoTest -Q "CREATE TABLE user (Name NVARCHAR(50), Surname NVARCHAR(50), Email NVARCHAR(100));"
+          docker exec sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${{ secrets.SQL_SERVER_PASSWORD }}" -Q "CREATE DATABASE AutoTest;"
+          docker exec sqlserver /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "${{ secrets.SQL_SERVER_PASSWORD }}" -d AutoTest -Q "CREATE TABLE users (Name NVARCHAR(50), Surname NVARCHAR(50), Email NVARCHAR(100));"
 
-      # Step 6: Install Zrok properly
+      # Install Zrok and Add to PATH
       - name: Install Zrok
         run: |
-          curl -sLO https://github.com/openziti/zrok/releases/latest/download/zrok-linux-amd64
-          chmod +x zrok-linux-amd64
-          sudo mv zrok-linux-amd64 /usr/local/bin/zrok
-          ls -lah /usr/local/bin/zrok  # Verify file existence
-          file /usr/local/bin/zrok      # Check file type
+          curl -s https://get.zrok.io | bash
+          echo 'export PATH=$HOME/bin:$PATH' >> ~/.bashrc
+          source ~/.bashrc
+          which zrok || echo "Zrok not found"
 
-      # Step 7: Verify Zrok execution
-      - name: Test Zrok Execution
+      # Verify Zrok Installation
+      - name: Check Zrok Installation
         run: |
-          zrok version || echo "❌ Zrok is not executing!"
+          if ! command -v zrok &> /dev/null; then
+            echo "❌ Zrok installation failed!"
+            exit 1
+          fi
 
-      # Step 8: Authenticate Zrok using your API token
+      # Authenticate Zrok
       - name: Authenticate Zrok
         run: |
-          zrok enable ${{ secrets.ZROK_AUTH_TOKEN }} || echo "❌ Zrok enable failed!"
+          $HOME/bin/zrok enable ${{ secrets.ZROK_AUTH_TOKEN }}
 
-      # Step 9: Expose SQL Server with Zrok
+      # Expose SQL Server with Zrok
       - name: Expose SQL Server with Zrok
         run: |
-          zrok share public tcp:1433 > zrok_output.txt
-          cat zrok_output.txt  # Display the Zrok public URL in the logs.
+          $HOME/bin/zrok share public tcp:1433 > zrok_output.txt
+          cat zrok_output.txt
